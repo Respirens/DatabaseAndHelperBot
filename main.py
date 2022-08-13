@@ -1,7 +1,3 @@
-import json
-import os.path
-import sys
-import threading
 from io import BytesIO
 
 import requests
@@ -13,8 +9,8 @@ from config import Config
 from models import Product
 
 LOCKED_CONFIG_PARAMS = [
-        "bot_token"
-    ]
+    "bot_token"
+]
 
 MAIN_MENU = ReplyKeyboardMarkup(resize_keyboard=True)
 MAIN_MENU.row("📁 База товарів", "📝 Генератор постів")
