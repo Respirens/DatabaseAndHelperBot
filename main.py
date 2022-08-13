@@ -1,5 +1,7 @@
 import json
 import os.path
+import sys
+import threading
 from io import BytesIO
 
 import requests
@@ -7,17 +9,12 @@ from peewee import DoesNotExist
 from telebot import TeleBot
 from telebot.types import Message, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardRemove
 
+from config import Config
 from models import Product
 
-DEFAULT_CONFIG = {
-    "bot_token": "change_this_bot_token",
-    "password": "change_this_password",
-    "admin_password": "change_this_admin_password"
-}
-
 LOCKED_CONFIG_PARAMS = [
-    "bot_token"
-]
+        "bot_token"
+    ]
 
 MAIN_MENU = ReplyKeyboardMarkup(resize_keyboard=True)
 MAIN_MENU.row("📁 База товарів", "📝 Генератор постів")
@@ -46,20 +43,10 @@ def generate_iterator_keyboard(product_id):
 def main():
     Product.create_table()
 
-    if os.path.exists("config.json"):
-        with open("config.json") as config_file:
-            config = json.load(config_file)
-    else:
-        with open("config.json", "w") as config_file:
-            json.dump(DEFAULT_CONFIG, config_file, indent=2)
-        print("Config file does not exist, default config will be created")
-        print("Set the bot token and passwords in the config, then run the bot")
-        exit(0)
-
     authorized_users = []
     authorized_admins = []
 
-    bot = TeleBot(config["bot_token"], parse_mode="HTML")
+    bot = TeleBot(Config.get_instance().get("bot_token"), parse_mode="HTML")
 
     @bot.message_handler(commands=["start"], chat_types=["private"])
     def _start(message: Message):
@@ -74,20 +61,24 @@ def main():
         if len(query) != 3:
             bot.send_message(message.chat.id, "❌ Помилка синтаксису")
             return
-        if query[1] not in config:
+        if query[1] not in Config.get_instance().config:
             bot.send_message(message.chat.id, f"❌ Параметр {query[1]} не існує")
             return
         if query[1] in LOCKED_CONFIG_PARAMS:
             bot.send_message(message.chat.id, f"❌ Неможливо змінити параметр {query[1]}")
             return
-        config[query[1]] = query[2]
-        bot.send_message(message.chat.id, f"✅ {query[1]}={query[2]}")
+        Config.get_instance().set(query[1], query[2])
+        bot.send_message(message.chat.id, f"✅ <i>{query[1]}</i> = <i>{query[2]}</i>")
 
     @bot.message_handler(commands=["saveconfig"], chat_types=["private"], func=lambda msg: msg.from_user.id in authorized_admins)
     def _save_config(message: Message):
-        with open("config.json", "w") as _config_file:
-            json.dump(config, _config_file, indent=2)
+        Config.get_instance().save()
         bot.send_message(message.chat.id, f"✅ Конфігурацію збережено")
+
+    @bot.message_handler(commands=["reloadconfig"], chat_types=["private"], func=lambda msg: msg.from_user.id in authorized_admins)
+    def _save_config(message: Message):
+        Config.get_instance().reload()
+        bot.send_message(message.chat.id, f"✅ Конфігурацію оновлено")
 
     @bot.message_handler(content_types=["text"], chat_types=["private"], func=lambda msg: msg.text == "📁 База товарів")
     def _products_database(message: Message):
@@ -106,8 +97,7 @@ def main():
             return
         bot.send_message(message.chat.id, "❕ Щоб створити пост відправте назву товару")
 
-    @bot.message_handler(content_types=["text"], chat_types=["private"],
-                         func=lambda msg: msg.text == config["password"])
+    @bot.message_handler(content_types=["text"], chat_types=["private"], func=lambda msg: msg.text == Config.get_instance().get("password"))
     def _auth(message: Message):
         if message.from_user.id not in authorized_users:
             authorized_users.append(message.from_user.id)
@@ -115,8 +105,7 @@ def main():
         else:
             bot.send_message(message.chat.id, "❌ Ви вже авторизовані", reply_markup=MAIN_MENU)
 
-    @bot.message_handler(content_types=["text"], chat_types=["private"],
-                         func=lambda msg: msg.text == config["admin_password"])
+    @bot.message_handler(content_types=["text"], chat_types=["private"], func=lambda msg: msg.text == Config.get_instance().get("admin_password"))
     def _admin_auth(message: Message):
         if message.from_user.id not in authorized_admins:
             authorized_admins.append(message.from_user.id)
@@ -146,9 +135,7 @@ def main():
                 image.seek(0)
                 bot.delete_message(call.message.chat.id, call.message.id)
                 bot.send_message(call.message.chat.id, "❕ Ви відкрили базу товарів", reply_markup=ReplyKeyboardRemove())
-                bot.send_photo(call.message.chat.id, image,
-                               caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн",
-                               reply_markup=markup)
+                bot.send_photo(call.message.chat.id, image, caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн", reply_markup=markup)
                 bot.answer_callback_query(call.id)
             except DoesNotExist:
                 bot.answer_callback_query(call.id, "❌ Виникла помилка", show_alert=True)
@@ -159,9 +146,7 @@ def main():
                 image = BytesIO(requests.get(product.image).content)
                 image.seek(0)
                 bot.delete_message(call.message.chat.id, call.message.id)
-                bot.send_photo(call.message.chat.id, image,
-                               caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн",
-                               reply_markup=markup)
+                bot.send_photo(call.message.chat.id, image, caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн", reply_markup=markup)
                 bot.answer_callback_query(call.id)
             except DoesNotExist:
                 bot.answer_callback_query(call.id, "❌ Товар з таким ID відсутній", show_alert=True)
