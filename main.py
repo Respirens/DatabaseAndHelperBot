@@ -1,14 +1,18 @@
-from io import BytesIO
+import os.path
 
-import requests
 from peewee import DoesNotExist
 from telebot import TeleBot
-from telebot.types import Message, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, ReplyKeyboardRemove
+from telebot.types import Message, ReplyKeyboardMarkup, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, \
+    ReplyKeyboardRemove
 
 from config import Config
 from models import Product
 
 LOCKED_CONFIG_PARAMS = [
+    "bot_token"
+]
+
+HIDDEN_CONFIG_PARAMS = [
     "bot_token"
 ]
 
@@ -38,6 +42,8 @@ def generate_iterator_keyboard(product_id):
 
 def main():
     Product.create_table()
+    if not os.path.exists("images"):
+        os.mkdir("images")
 
     authorized_users = []
     authorized_admins = []
@@ -51,8 +57,8 @@ def main():
             return
         bot.send_message(message.chat.id, f"Вітаю, {message.from_user.full_name}", reply_markup=MAIN_MENU)
 
-    @bot.message_handler(commands=["set"], chat_types=["private"], func=lambda msg: msg.from_user.id in authorized_admins)
-    def _set(message: Message):
+    @bot.message_handler(commands=["setconfig"], chat_types=["private"], func=lambda msg: msg.from_user.id in authorized_admins)
+    def _set_config(message: Message):
         query = message.text.split(" ")
         if len(query) != 3:
             bot.send_message(message.chat.id, "❌ Помилка синтаксису")
@@ -66,13 +72,27 @@ def main():
         Config.get_instance().set(query[1], query[2])
         bot.send_message(message.chat.id, f"✅ <i>{query[1]}</i> = <i>{query[2]}</i>")
 
+    @bot.message_handler(commands=["getconfig"], chat_types=["private"], func=lambda msg: msg.from_user.id in authorized_admins)
+    def _get_config(message: Message):
+        query = message.text.split(" ")
+        if len(query) != 2:
+            bot.send_message(message.chat.id, "❌ Помилка синтаксису")
+            return
+        if query[1] not in Config.get_instance().config:
+            bot.send_message(message.chat.id, f"❌ Параметр {query[1]} не існує")
+            return
+        if query[1] in HIDDEN_CONFIG_PARAMS:
+            bot.send_message(message.chat.id, f"❌ Неможливо отримати параметр {query[1]}")
+            return
+        bot.send_message(message.chat.id, f"ℹ️ <i>{query[1]}</i> = <i>{Config.get_instance().get(query[1])}</i>")
+
     @bot.message_handler(commands=["saveconfig"], chat_types=["private"], func=lambda msg: msg.from_user.id in authorized_admins)
     def _save_config(message: Message):
         Config.get_instance().save()
         bot.send_message(message.chat.id, f"✅ Конфігурацію збережено")
 
     @bot.message_handler(commands=["reloadconfig"], chat_types=["private"], func=lambda msg: msg.from_user.id in authorized_admins)
-    def _save_config(message: Message):
+    def _reload_config(message: Message):
         Config.get_instance().reload()
         bot.send_message(message.chat.id, f"✅ Конфігурацію оновлено")
 
@@ -86,14 +106,16 @@ def main():
         database_length = Product.select().count()
         bot.send_message(message.chat.id, f"▫️ Товарів в базі: {database_length}", reply_markup=markup)
 
-    @bot.message_handler(content_types=["text"], chat_types=["private"], func=lambda msg: msg.text == "📝 Генератор постів")
+    @bot.message_handler(content_types=["text"], chat_types=["private"],
+                         func=lambda msg: msg.text == "📝 Генератор постів")
     def _post_generator_tip(message: Message):
         if message.from_user.id not in authorized_users:
             bot.send_message(message.chat.id, "❌ Ви не авторизовані")
             return
         bot.send_message(message.chat.id, "❕ Щоб створити пост відправте назву товару")
 
-    @bot.message_handler(content_types=["text"], chat_types=["private"], func=lambda msg: msg.text == Config.get_instance().get("password"))
+    @bot.message_handler(content_types=["text"], chat_types=["private"],
+                         func=lambda msg: msg.text == Config.get_instance().get("password"))
     def _auth(message: Message):
         if message.from_user.id not in authorized_users:
             authorized_users.append(message.from_user.id)
@@ -101,7 +123,8 @@ def main():
         else:
             bot.send_message(message.chat.id, "❌ Ви вже авторизовані", reply_markup=MAIN_MENU)
 
-    @bot.message_handler(content_types=["text"], chat_types=["private"], func=lambda msg: msg.text == Config.get_instance().get("admin_password"))
+    @bot.message_handler(content_types=["text"], chat_types=["private"],
+                         func=lambda msg: msg.text == Config.get_instance().get("admin_password"))
     def _admin_auth(message: Message):
         if message.from_user.id not in authorized_admins:
             authorized_admins.append(message.from_user.id)
@@ -127,11 +150,10 @@ def main():
             try:
                 product = Product.get(Product.id == 1)
                 markup = generate_iterator_keyboard(product.id)
-                image = BytesIO(requests.get(product.image).content)
-                image.seek(0)
-                bot.delete_message(call.message.chat.id, call.message.id)
-                bot.send_message(call.message.chat.id, "❕ Ви відкрили базу товарів", reply_markup=ReplyKeyboardRemove())
-                bot.send_photo(call.message.chat.id, image, caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн", reply_markup=markup)
+                with open(product.image, "rb") as image:
+                    bot.send_message(call.message.chat.id, "❕ Ви відкрили базу товарів", reply_markup=ReplyKeyboardRemove())
+                    bot.delete_message(call.message.chat.id, call.message.id)
+                    bot.send_photo(call.message.chat.id, image, caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн", reply_markup=markup)
                 bot.answer_callback_query(call.id)
             except DoesNotExist:
                 bot.answer_callback_query(call.id, "❌ Виникла помилка", show_alert=True)
@@ -139,10 +161,9 @@ def main():
             try:
                 product = Product.get(Product.id == int(query[1]))
                 markup = generate_iterator_keyboard(product.id)
-                image = BytesIO(requests.get(product.image).content)
-                image.seek(0)
-                bot.delete_message(call.message.chat.id, call.message.id)
-                bot.send_photo(call.message.chat.id, image, caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн", reply_markup=markup)
+                with open(product.image, "rb") as image:
+                    bot.delete_message(call.message.chat.id, call.message.id)
+                    bot.send_photo(call.message.chat.id, image, caption=f"<b>ID #{product.id}</b>\n{product.name}\nЦіна: {product.price} грн", reply_markup=markup)
                 bot.answer_callback_query(call.id)
             except DoesNotExist:
                 bot.answer_callback_query(call.id, "❌ Товар з таким ID відсутній", show_alert=True)
